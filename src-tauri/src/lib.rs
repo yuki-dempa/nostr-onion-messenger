@@ -190,12 +190,22 @@ fn stop_relay(state: tauri::State<Mutex<AppState>>, id: String) -> Result<(), St
 }
 
 #[tauri::command]
-fn delete_relay(state: tauri::State<Mutex<AppState>>, id: String) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| e.to_string())?;
-    s.relay_mgr.stop(&id)?;
-    if let Some(rec) = s.store.remove(&id) {
-        std::fs::remove_dir_all(&rec.dir).ok();
-        s.store.save().map_err(|e| e.to_string())?;
+async fn delete_relay(state: tauri::State<'_, Mutex<AppState>>, id: String) -> Result<(), String> {
+    let (onion, control_port, data_dir) = {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        s.relay_mgr.stop(&id)?;
+        let onion = s.store.get(&id).and_then(|r| r.onion_address.clone());
+        if let Some(rec) = s.store.remove(&id) {
+            std::fs::remove_dir_all(&rec.dir).ok();
+            s.store.save().map_err(|e| e.to_string())?;
+        }
+        (onion, s.tor.control_port, s.tor.data_dir.clone())
+    };
+    // onionサービスも解放する (Detachしているため明示的なDEL_ONIONが必要)
+    if let Some(host) = onion {
+        if let Err(e) = tor::del_onion(control_port, &data_dir, &host).await {
+            eprintln!("onion削除失敗 ({host}): {e}");
+        }
     }
     Ok(())
 }
