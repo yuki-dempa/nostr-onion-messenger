@@ -29,3 +29,6 @@ vendor/
 
 # App icon source (生成物は src-tauri/icons)
 app-icon.png
+
+# バックエンドのデータ (relay DB, tor)
+data/
