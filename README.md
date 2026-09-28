@@ -28,11 +28,27 @@ vendor/
 data/             … state.json, relays/<id>/ (LMDB), tor/
 ```
 
+## 対応プラットフォーム
+
+| プラットフォーム | 使い方 | 状態 |
+|---|---|---|
+| macOS | ネイティブでバックエンド+クライアントを動かす | 動作確認済み (arm64) |
+| Linux | 同様にネイティブで動作 (依存ライブラリはディストリのパッケージで) | 未検証 |
+| Windows | **WSL2** 上で Linux と同じ手順 (strfry本体のWindowsネイティブビルドは非対応のため) | 未検証 |
+| iOS / Android | PC/Mac上で動かしたバックエンドに、スマホのブラウザから `http://<PCのIP>:8787` でアクセス | レスポンシブUI対応済み |
+
+スマートフォン上ではstrfry/torデーモンを動かせないため、iOS/Androidは「PCをサーバーにしてLAN経由でブラウザアクセス」する構成になる。
+モバイルブラウザではNIP-07拡張機能が使えないことが多いので、ログインは **bunker:// (NIP-46)** を使う。
+
+**セキュリティ注意**: デフォルトでは `HOST=0.0.0.0` でバインドするため、LAN内の誰でもアクセスできる (認証なし)。
+ローカルのみで使う場合は `HOST=127.0.0.1 npm start` とすること。
+
 ## 前提
 
-- macOS (arm64)
+- macOS (arm64) / Linux / Windows (WSL2)
 - Node.js, Go
-- Homebrew: `tor lmdb secp256k1 zstd libuv flatbuffers`
+- Homebrew (macOS): `tor lmdb secp256k1 zstd libuv flatbuffers`
+- Debian/Ubuntu (WSL2含む): `tor liblmdb-dev libsecp256k1-dev libzstd-dev libuv1-dev flatbuffers-compiler build-essential`
 
 ## セットアップ・起動
 
