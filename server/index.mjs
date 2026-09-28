@@ -15,10 +15,14 @@ import { SocksProxyAgent } from "socks-proxy-agent";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.DATA_DIR ?? path.join(ROOT, "data");
-const STRFRY_BIN = process.env.STRFRY_BIN ?? path.join(ROOT, "vendor/strfry/strfry");
-const STRFRY29_BIN = process.env.STRFRY29_BIN ?? path.join(ROOT, "vendor/relay29/strfry29/strfry29");
-const TOR_BIN = process.env.TOR_BIN ?? "tor";
+const EXE = process.platform === "win32" ? ".exe" : "";
+const STRFRY_BIN = process.env.STRFRY_BIN ?? path.join(ROOT, "vendor/strfry", "strfry" + EXE);
+const STRFRY29_BIN = process.env.STRFRY29_BIN ?? path.join(ROOT, "vendor/relay29/strfry29", "strfry29" + EXE);
+const TOR_BIN = process.env.TOR_BIN ?? (process.platform === "win32" ? "tor.exe" : "tor");
 const HTTP_PORT = Number(process.env.PORT ?? 8787);
+// スマートフォン等の他デバイスから使う場合はLANに公開する必要がある。
+// ローカルのみで使う場合は HOST=127.0.0.1 を指定すること。
+const HOST = process.env.HOST ?? "0.0.0.0";
 const STATIC_DIR = path.join(ROOT, "dist");
 
 /* ---------- ユーティリティ ---------- */
@@ -69,7 +73,7 @@ relay {
     queryTimesliceBudgetMicroseconds = 10000
     maxFilterLimit = 500
     maxSubsPerConnection = 20
-    writePolicy { plugin = "${STRFRY29_BIN}" }
+    writePolicy { plugin = "${STRFRY29_BIN.split(path.sep).join("/")}" }
     compression { enabled = false slidingWindow = true }
     logging { dumpInAll = false dumpInEvents = false dumpInReqs = false dbScanPerf = false invalidEvents = true }
     numThreads { ingester = 3 reqWorker = 3 reqMonitor = 3 negentropy = 2 }
@@ -458,8 +462,11 @@ async function main() {
   }
   ensureOnions().catch(() => {});
 
-  server.listen(HTTP_PORT, () => {
-    console.log(`Nostr Onion Messenger: http://localhost:${HTTP_PORT}`);
+  server.listen(HTTP_PORT, HOST, () => {
+    console.log(`Nostr Onion Messenger: http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${HTTP_PORT}`);
+    if (HOST === "0.0.0.0") {
+      console.log("LAN内の他デバイス (スマートフォン等) からは http://<このPCのIP>:" + HTTP_PORT + " でアクセスできます");
+    }
   });
 
   const shutdown = () => {
