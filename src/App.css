@@ -110,3 +110,20 @@ code { color: #9ecbff; font-size: 12px; }
   border-top: 1px solid #333844;
 }
 .chat-input input { flex: 1; }
+
+/* モバイル/狭い画面: サイドバーを上に積み、メンバー一覧を下に畳む */
+@media (max-width: 720px) {
+  .app-body { flex-direction: column; }
+  .sidebar {
+    width: 100%; max-height: 38vh;
+    border-right: none; border-bottom: 1px solid #333844;
+  }
+  .chat-body { flex-direction: column; }
+  .members {
+    width: 100%; max-height: 130px;
+    border-left: none; border-top: 1px solid #333844;
+  }
+  .message { max-width: 92%; }
+  .signer-bar { flex-wrap: wrap; }
+  .signer-bar input { max-width: 100%; }
+}
