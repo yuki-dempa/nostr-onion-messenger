@@ -1,42 +1,61 @@
-# Nostr Onion Messenger
+# Nostr Onion Messenger (Web版)
 
-NIP-29 (relay-based groups) の**招待制onionルーティングrelay**を、GUIの「新しいRelayを作成」ボタンから自由に作成・利用できるメッセンジャー (macOS向けTauriアプリ)。
+NIP-29 (relay-based groups) の**招待制onionルーティングrelay**を、GUIの「新しいRelayを作成」ボタンから自由に作成・利用できるメッセンジャー。
+
+ブラウザのWebクライアント + ローカルで動くNode.jsバックエンド (strfry / tor のプロセス管理 + WebSocketプロキシ) の構成。
 
 ## 特徴
 
 - **ワンクリックrelay作成**: strfry + strfry29 (NIP-29プラグイン) をローカルで自動起動。localhostポートは未使用ポートを自動割当
-- **Tor Hidden Service**: 作成したrelayはv3 onionアドレスで自動公開され、外部から `ws://xxxx.onion` でアクセス可能
-- **単一relay接続**: 選択中のrelayだけに読み書きを自動切替
-- **NIP-46リモート署名**: 秘密鍵をアプリに持たない (bunker:// 対応)
-- **招待制グループ**: グループ作成 / 参加リクエスト / 承認・メンバー削除 / チャット (kind 9)
+- **Tor Hidden Service**: 作成したrelayはv3 onionアドレスで自動公開 (`Flags=Detach` + 鍵永続化で再起動後も同一アドレス)
+- **単一relay接続**: 選択中のrelayだけに読み書きを自動切替 (バックエンドのWSプロキシ経由。onionへはTorのSOCKS5経由)
+- **ブラウザ拡張でログイン (NIP-07)**: Alby / nos2x 等の拡張機能でアカウント認証。秘密鍵はアプリに渡らない。bunker:// (NIP-46) も併用可
+- **招待制グループ**: グループ作成 / 参加リクエスト / メンバー管理 / チャット (kind 9)
 
 ## 構成
 
 ```
-Tauri App (React + TypeScript / Rust)
-  ├─ RelayManager … strfry子プロセス管理 (strfry.conf/strfry29.json自動生成)
-  ├─ TorManager   … torプロセス + Control Port (ADD_ONIONでonion発行)
-  └─ Bridge       … 外部onion relayへのSOCKS5→ローカルWebSocketブリッジ
+ブラウザ (React + TypeScript + nostr-tools)
+  │ HTTP API / WebSocket
+  ▼
+server/index.mjs (Node.js)
+  ├─ strfry 子プロセス管理 (strfry.conf / strfry29.json 自動生成, 空きポート割当)
+  ├─ tor 子プロセス管理 (Control Port: ADD_ONION Flags=Detach / DEL_ONION)
+  └─ WSプロキシ /ws?target=local:<port> | onion:<host> (onionはSOCKS5経由)
 vendor/
   ├─ strfry/      … relay本体 (macOS向けにビルド)
   └─ relay29/strfry29/ … NIP-29 write-policyプラグイン (パッチ適用済み)
+data/             … state.json, relays/<id>/ (LMDB), tor/
 ```
 
 ## 前提
 
 - macOS (arm64)
-- Rust (rustup), Node.js, Go
+- Node.js, Go
 - Homebrew: `tor lmdb secp256k1 zstd libuv flatbuffers`
 
-## ビルド
+## セットアップ・起動
 
 ```sh
 # vendor (strfry / strfry29) の取得・パッチ適用・ビルド (初回のみ)
 ./scripts/setup-vendor.sh
 
-# アプリ
-npm install && npm run tauri dev
+npm install
+
+# 本番相当: フロントをビルドしてバックエンドが配信
+npm start          # → http://localhost:8787
+
+# 開発: バックエンドとviteを別々に起動 (viteは /api, /ws を :8787 にプロキシ)
+npm run server     # ターミナル1
+npm run dev        # ターミナル2 → http://localhost:1420
 ```
+
+## 使い方
+
+1. ブラウザで開き、上部バーの「拡張機能でログイン」(NIP-07) または bunker URI で署名機に接続
+2. 「新しいRelayを作成」→ 数十秒でonionアドレスが発行される (Torブートストラップ待ち)
+3. relayを選択 → 「グループを作成」→ チャット
+4. 他ユーザーは「外部Relay (onion)」にそのonionアドレスを追加して参加リクエストを送る
 
 ## vendorパッチについて
 
@@ -46,27 +65,14 @@ npm install && npm run tauri dev
 2. **メモリ状態の不整合**: join受理時の put-user (kind 9000) が `strfry import` 経由だとwrite policyを通らずメモリ上のグループ状態に反映されない → `AddEvent` で `ApplyModerationAction` を明示呼出し
 3. **replaceable競合**: 更新されたメタデータ (kind 39002等) がグループ作成時刻のまま署名され、同一 `created_at` だとstrfryのreplaceable解決で古い方が残る → `BroadcastEvent` で `created_at` を現在時刻+1秒に繰り上げて再署名
 
-また Tor の ephemeral onion service は制御接続が切れると消えるため、`ADD_ONION` に `Flags=Detach` が必須 (`src-tauri/src/tor.rs` 参照)。
+Torの注意点: ephemeral onion serviceは制御接続が切れると消えるため `Flags=Detach` が必須。また `DiscardPK` を付けるとPrivateKeyが返らずアドレスを永続化できないため付けない。
 
-## 手動E2E確認手順
-
-1. `npm run tauri dev` でアプリ起動 (Torブートストラップ完了まで待つ)
-2. 「新しいRelayを作成」→ relayが一覧に現れ、数十秒以内にonionアドレスが付く
-3. 上部バーに bunker:// URI (nsec.app 等で発行) を入力して署名機に接続
-4. relayを選択 → 「グループを作成」→ チャット送信できること
-5. 別アカウントで: 「外部relayを追加」に 2 のonionアドレスを入力 → 選択 → グループを開いて「参加リクエストを送る」→ メンバーに追加されチャットできること
-6. 管理側でメンバーの「削除」が効くこと
-
-スモークテスト (GUIなしでstrfry+strfry29のNIP-29動作を検証):
+## スモークテスト
 
 ```sh
-# relayを手動で立てた状態で
-node scripts/smoke-nip29.mjs ws://127.0.0.1:17777
+# local経路
+node scripts/smoke-nip29.mjs 'ws://127.0.0.1:8787/ws?target=local:<port>'
+
+# onion経路 (遅いのでwaitを伸ばす)
+node scripts/smoke-nip29.mjs 'ws://127.0.0.1:8787/ws?target=onion:<addr>.onion' 10000
 ```
-
-## データ保存先
-
-`~/Library/Application Support/dev.onionmessenger.app/`
-- `state.json` — relay定義 (ポート/onion鍵/relay署名鍵)
-- `relays/<id>/` — strfry.conf, strfry29.json, strfry-db (LMDB)
-- `tor/` — tor data dir
