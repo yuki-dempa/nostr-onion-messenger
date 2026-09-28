@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, loadExternalRelays, onRelayUpdated, saveExternalRelays } from "../api";
+import { api, loadExternalRelays, saveExternalRelays } from "../api";
 import type { RelayDto, RelayTarget } from "../types";
 
 interface Props {
@@ -27,15 +27,16 @@ export default function RelaySidebar({ selected, onSelect, relaysVersion, onRela
 
   useEffect(() => {
     refresh();
-    const un = onRelayUpdated(() => refresh());
-    return un;
+    // onion発行などの更新を定期ポーリングで拾う
+    const timer = setInterval(refresh, 3000);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relaysVersion]);
 
   useEffect(() => {
     const timer = setInterval(async () => {
       try {
-        setTorProgress(await api.torStatus());
+        setTorProgress((await api.torStatus()).progress);
       } catch {
         // tor未起動時は無視
       }

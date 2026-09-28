@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-import { api } from "./api";
+import { relayWsUrl } from "./api";
 import { activeRelay, type ConnectionStatus } from "./relayConnection";
 import { currentPubkey } from "./signer";
 import type { RelayTarget } from "./types";
@@ -22,24 +22,15 @@ function App() {
     });
   }, []);
 
-  // 選択されたrelayに接続を切り替える (読み書きは常に選択中の1本のみ)
+  // 選択されたrelayに接続を切り替える (読み書きは常に選択中の1本のみ。
+  // onion/local どちらもバックエンドのWSプロキシ経由)
   useEffect(() => {
     if (!selected) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const url =
-          selected.kind === "local"
-            ? selected.relay.local_url
-            : await api.openOnionBridge(selected.address);
-        if (!cancelled) await activeRelay.switchTo(url);
-      } catch (e) {
-        console.error("接続失敗:", e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    const url =
+      selected.kind === "local"
+        ? relayWsUrl({ kind: "local", port: selected.relay.port })
+        : relayWsUrl({ kind: "onion", address: selected.address });
+    activeRelay.switchTo(url).catch((e) => console.error("接続失敗:", e));
   }, [selected]);
 
   return (
