@@ -17,7 +17,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.DATA_DIR ?? path.join(ROOT, "data");
 const STRFRY_BIN = process.env.STRFRY_BIN ?? path.join(ROOT, "vendor/strfry/strfry");
 const STRFRY29_BIN = process.env.STRFRY29_BIN ?? path.join(ROOT, "vendor/relay29/strfry29/strfry29");
-const TOR_BIN = process.env.TOR_BIN ?? "/opt/homebrew/bin/tor";
+const TOR_BIN = process.env.TOR_BIN ?? "tor";
 const HTTP_PORT = Number(process.env.PORT ?? 8787);
 const STATIC_DIR = path.join(ROOT, "dist");
 

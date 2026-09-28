@@ -2,7 +2,6 @@ export interface RelayDto {
   id: string;
   name: string;
   port: number;
-  local_url: string;
   onion_address: string | null;
   running: boolean;
 }

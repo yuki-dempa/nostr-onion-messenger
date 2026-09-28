@@ -1,12 +1,11 @@
 diff --git a/strfry29/main.go b/strfry29/main.go
-index fb98348..7bcf37d 100644
+index fb98348..7052eda 100644
 --- a/strfry29/main.go
 +++ b/strfry29/main.go
-@@ -1,11 +1,14 @@
+@@ -1,11 +1,13 @@
  package main
  
  import (
-+	"fmt"
 +	"bytes"
  	"context"
  	"encoding/json"
@@ -17,7 +16,7 @@ index fb98348..7bcf37d 100644
  	"path/filepath"
  	"slices"
  	"time"
-@@ -21,8 +24,43 @@ var (
+@@ -21,8 +23,34 @@ var (
  	ctx   = context.Background()
  
  	strfrydb strfry.StrfryBackend
@@ -31,15 +30,6 @@ index fb98348..7bcf37d 100644
 +	StrfryExecutable        string              `json:"strfry_executable_path"`
 +	Permissions             map[string][]string `json:"permissions"`
 +	GroupCreatorDefaultRole string              `json:"group_creator_default_role"`
-+}
-+
-+func debugLog(format string, args ...any) {
-+	f, err := os.OpenFile("strfry29-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-+	if err != nil {
-+		return
-+	}
-+	defer f.Close()
-+	fmt.Fprintf(f, format+"\n", args...)
 +}
 +
 +// saveEvent imports an event into strfry's DB.
@@ -61,7 +51,7 @@ index fb98348..7bcf37d 100644
  func main() {
  	incoming := json.NewDecoder(os.Stdin)
  	outgoing := json.NewEncoder(os.Stdout)
-@@ -35,14 +73,6 @@ func main() {
+@@ -35,14 +63,6 @@ func main() {
  		return
  	}
  
@@ -76,21 +66,18 @@ index fb98348..7bcf37d 100644
  	if err := json.Unmarshal(confb, &conf); err != nil {
  		log.Fatalf("invalid json config at %s: %s", path, err)
  		return
-@@ -144,10 +174,31 @@ type StrfryResponse struct {
+@@ -144,10 +164,25 @@ type StrfryResponse struct {
  type protoRelay struct{}
  
  func (p protoRelay) AddEvent(ctx context.Context, evt *nostr.Event) (skipBroadcast bool, writeError error) {
 -	err := strfrydb.SaveEvent(ctx, evt)
 -	return false, err
-+	debugLog("AddEvent kind=%d id=%s", evt.Kind, evt.ID)
 +	if err := saveEvent(evt); err != nil {
-+		debugLog("AddEvent saveEvent FAILED: %s", err)
 +		return false, err
 +	}
 +	// strfry import はwrite policyを通らないため、メモリ上のグループ状態に
 +	// ここで明示的に反映する (これが無いとjoin直後の投稿が "unknown member" になる)
 +	state.ApplyModerationAction(ctx, evt)
-+	debugLog("AddEvent ApplyModerationAction done kind=%d", evt.Kind)
 +	return false, nil
  }
  
@@ -102,12 +89,9 @@ index fb98348..7bcf37d 100644
 +	if now := nostr.Now(); evt.CreatedAt <= now {
 +		evt.CreatedAt = now + 1
 +		if err := evt.Sign(conf.RelaySecretKey); err != nil {
-+			debugLog("BroadcastEvent re-sign FAILED: %s", err)
 +			return
 +		}
 +	}
-+	debugLog("BroadcastEvent kind=%d id=%s created_at=%d", evt.Kind, evt.ID, evt.CreatedAt)
 +	if err := saveEvent(evt); err != nil {
-+		debugLog("BroadcastEvent saveEvent FAILED: %s", err)
 +	}
  }
