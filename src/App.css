@@ -111,6 +111,8 @@ code { color: #9ecbff; font-size: 12px; }
 }
 .chat-input input { flex: 1; }
 
+.hosted-note { font-size: 11px; margin-top: 4px; line-height: 1.4; }
+
 /* モバイル/狭い画面: サイドバーを上に積み、メンバー一覧を下に畳む */
 @media (max-width: 720px) {
   .app-body { flex-direction: column; }

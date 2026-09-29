@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, loadExternalRelays, saveExternalRelays } from "../api";
+import { api, authenticate, authToken, loadExternalRelays, saveExternalRelays } from "../api";
+import { currentPubkey } from "../signer";
 import type { RelayDto, RelayTarget } from "../types";
 
 interface Props {
@@ -13,9 +14,14 @@ export default function RelaySidebar({ selected, onSelect, relaysVersion, onRela
   const [relays, setRelays] = useState<RelayDto[]>([]);
   const [externals, setExternals] = useState<string[]>(loadExternalRelays());
   const [torProgress, setTorProgress] = useState(0);
+  const [hosted, setHosted] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newExt, setNewExt] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.serverInfo().then((info) => setHosted(info.hosted)).catch(() => {});
+  }, []);
 
   const refresh = async () => {
     try {
@@ -45,12 +51,27 @@ export default function RelaySidebar({ selected, onSelect, relaysVersion, onRela
   }, []);
 
   const createRelay = async () => {
+    // ホストモード: relayはこのサイトのサーバー上に作られ、アカウントに紐づく。
+    // 作成にはログイン + サーバー認証 (NIP-98署名) が必要
+    if (hosted && !currentPubkey()) {
+      setError("このサイトでRelayを作成するには、まず上部のバーからログインしてください");
+      return;
+    }
     const name = window.prompt("新しいRelayの名前", `relay-${relays.length + 1}`);
     if (!name) return;
     setCreating(true);
     setError(null);
     try {
-      const rec = await api.createRelay(name);
+      if (hosted && !authToken()) await authenticate();
+      let rec: RelayDto;
+      try {
+        rec = await api.createRelay(name);
+      } catch (e) {
+        // トークン期限切れ等の場合は再認証して1回だけリトライ
+        if (!hosted) throw e;
+        await authenticate();
+        rec = await api.createRelay(name);
+      }
       await refresh();
       onRelaysChanged();
       onSelect({ kind: "local", relay: rec });
@@ -99,6 +120,11 @@ export default function RelaySidebar({ selected, onSelect, relaysVersion, onRela
       <button className="create-relay" onClick={createRelay} disabled={creating}>
         {creating ? "作成中..." : "＋ 新しいRelayを作成"}
       </button>
+      {hosted && (
+        <div className="muted hosted-note">
+          ホストモード: Relayはこのサイトのサーバー上に作成され、あなたのアカウント専用になります
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
 
       <h3>自分のRelay</h3>

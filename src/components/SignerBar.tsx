@@ -11,6 +11,7 @@ import {
   savedBunkerUri,
   type SignerKind,
 } from "../signer";
+import { clearAuthToken } from "../api";
 
 const KIND_LABEL: Record<SignerKind, string> = {
   nip07: "拡張機能",
@@ -55,6 +56,7 @@ export default function SignerBar({ onChanged }: { onChanged: () => void }) {
 
   const disconnect = () => {
     disconnectSigner();
+    clearAuthToken(); // サーバーのセッショントークンも破棄
     setPubkey(null);
     setKind(null);
     onChanged();
