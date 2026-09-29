@@ -12,6 +12,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { SocksProxyAgent } from "socks-proxy-agent";
+import { verifyEvent } from "nostr-tools";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA_DIR = process.env.DATA_DIR ?? path.join(ROOT, "data");
@@ -23,6 +24,11 @@ const HTTP_PORT = Number(process.env.PORT ?? 8787);
 // スマートフォン等の他デバイスから使う場合はLANに公開する必要がある。
 // ローカルのみで使う場合は HOST=127.0.0.1 を指定すること。
 const HOST = process.env.HOST ?? "0.0.0.0";
+// HOSTED=1: マルチテナント公開モード (セルフホストしないデバイス向けにサイトを公開する場合)。
+// relay作成・管理にNostrアカウント認証 (NIP-98署名→トークン) が必須になり、
+// 各ユーザーは自分が作成したrelayだけを閲覧・操作できる。
+const HOSTED = process.env.HOSTED === "1";
+const MAX_RELAYS_PER_USER = Number(process.env.MAX_RELAYS_PER_USER ?? 3);
 const STATIC_DIR = path.join(ROOT, "dist");
 
 /* ---------- ユーティリティ ---------- */
@@ -54,6 +60,48 @@ function saveState() {
   const tmp = statePath + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(relays, null, 2));
   fs.renameSync(tmp, statePath);
+}
+
+/* ---------- 認証 (HOSTEDモード用: NIP-98署名 → セッショントークン) ---------- */
+
+const sessions = new Map(); // token -> { pubkey, expires }
+const SESSION_TTL_MS = 30 * 24 * 3600 * 1000; // 30日
+
+function issueSession(pubkey) {
+  const token = crypto.randomBytes(32).toString("hex");
+  sessions.set(token, { pubkey, expires: Date.now() + SESSION_TTL_MS });
+  return token;
+}
+
+/** Bearerヘッダまたはトークン文字列からpubkeyを引く。無効/期限切れならnull */
+function pubkeyByToken(token) {
+  const s = token ? sessions.get(token) : null;
+  if (!s) return null;
+  if (s.expires < Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+  return s.pubkey;
+}
+
+function authPubkey(req) {
+  const m = (req.headers.authorization ?? "").match(/^Bearer\s+([0-9a-f]{64})$/);
+  return pubkeyByToken(m?.[1]);
+}
+
+function isLoopback(req) {
+  return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
+}
+
+/** NIP-98 (kind 27235) の認証イベントを検証し、pubkeyを返す */
+function verifyAuthEvent(ev) {
+  if (!ev || ev.kind !== 27235) throw new Error("kind 27235 のイベントが必要です");
+  if (Math.abs(ev.created_at - Math.floor(Date.now() / 1000)) > 600) throw new Error("認証イベントのcreated_atが期限外です");
+  // リバースプロキシ越しでも動くよう、uタグはパス末尾だけを照合する
+  const u = ev.tags?.find((t) => t[0] === "u")?.[1] ?? "";
+  if (!u.replace(/\/$/, "").endsWith("/api/auth")) throw new Error("uタグが /api/auth を指していません");
+  if (!verifyEvent(ev)) throw new Error("署名が不正です");
+  return ev.pubkey;
 }
 
 /* ---------- strfry.conf / strfry29.json 生成 ---------- */
@@ -302,10 +350,28 @@ const server = createServer(async (req, res) => {
   const p = url.pathname;
 
   try {
+    if (p === "/api/server-info" && req.method === "GET") {
+      return json(res, 200, { hosted: HOSTED });
+    }
+    if (p === "/api/auth" && req.method === "POST") {
+      const { event } = await readBody(req);
+      const pubkey = verifyAuthEvent(event);
+      return json(res, 200, { token: issueSession(pubkey), pubkey });
+    }
     if (p === "/api/relays" && req.method === "GET") {
-      return json(res, 200, relays.map(dto));
+      if (!HOSTED) return json(res, 200, relays.map(dto));
+      const pk = authPubkey(req);
+      // 未認証の閲覧者には空を返す (relayの存在自体を公開しない)
+      return json(res, 200, pk ? relays.filter((r) => r.owner === pk).map(dto) : []);
     }
     if (p === "/api/relays" && req.method === "POST") {
+      let owner = null;
+      if (HOSTED) {
+        owner = authPubkey(req);
+        if (!owner) return json(res, 401, { error: "認証が必要です (ログインしてから作成してください)" });
+        if (relays.filter((r) => r.owner === owner).length >= MAX_RELAYS_PER_USER)
+          return json(res, 403, { error: `作成できるRelayは1アカウント${MAX_RELAYS_PER_USER}つまでです` });
+      }
       const { name } = await readBody(req);
       if (!name) return json(res, 400, { error: "nameが必要です" });
       const id = crypto.randomUUID();
@@ -314,6 +380,7 @@ const server = createServer(async (req, res) => {
         id,
         name,
         port,
+        owner,
         onion_address: null,
         onion_key: null,
         relay_secret_key: crypto.randomBytes(32).toString("hex"),
@@ -329,6 +396,12 @@ const server = createServer(async (req, res) => {
     if (mRelay) {
       const rec = relays.find((r) => r.id === mRelay[1]);
       if (!rec) return json(res, 404, { error: "relayが見つかりません" });
+      if (HOSTED) {
+        // owner付きrelayは所有者のみ、owner無し(旧来/管理者作成)はloopbackのみ操作可
+        const pk = authPubkey(req);
+        const allowed = rec.owner ? rec.owner === pk : isLoopback(req);
+        if (!allowed) return json(res, 403, { error: "このRelayを操作する権限がありません" });
+      }
       const action = mRelay[2];
       if (req.method === "DELETE") {
         stopRelayProc(rec.id);
@@ -386,6 +459,17 @@ server.on("upgrade", (req, sock, head) => {
   if (!m) {
     sock.destroy();
     return;
+  }
+  // ホストモードでlocal接続する場合は、ハンドシェイク前に所有者確認する
+  // (handleUpgrade後にcloseするとクライアントからは一旦openに見えてしまうため)。
+  // メンバー等の第三者は onion アドレス経由で接続する
+  if (HOSTED && m[1] === "local") {
+    const rec = relays.find((r) => r.port === Number(m[2]));
+    const pk = pubkeyByToken(url.searchParams.get("token"));
+    if (rec && !(rec.owner ? rec.owner === pk : isLoopback(req))) {
+      sock.destroy();
+      return;
+    }
   }
 
   wss.handleUpgrade(req, sock, head, async (clientWs) => {
@@ -463,7 +547,7 @@ async function main() {
   ensureOnions().catch(() => {});
 
   server.listen(HTTP_PORT, HOST, () => {
-    console.log(`Nostr Onion Messenger: http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${HTTP_PORT}`);
+    console.log(`Nostr Onion Messenger: http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${HTTP_PORT}${HOSTED ? " (HOSTEDモード: アカウント毎にrelayを分離)" : ""}`);
     if (HOST === "0.0.0.0") {
       console.log("LAN内の他デバイス (スマートフォン等) からは http://<このPCのIP>:" + HTTP_PORT + " でアクセスできます");
     }
